@@ -1,0 +1,16 @@
+# Data (don't commit competition data unless license permits redistribution)
+Task3/publish/
+Training_set.csv
+Testing_set.csv
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
