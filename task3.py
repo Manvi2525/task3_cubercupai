@@ -1,6 +1,7 @@
 """
 RTC Traffic Classification -- CyberAI Cup 2026, Task 3
-FINAL pipeline v2: production ensemble + time-ratio features + Zoom rule.
+FINAL pipeline v4: production ensemble + Zoom rule + soft mode-probability
+feature.
 
 Score history (see RTC_Project_Complete_Reference.md, Section 5, for full
 chronology and rationale of every step up to 0.8300):
@@ -13,16 +14,25 @@ chronology and rationale of every step up to 0.8300):
              (double-nested CV: outer 5-fold, inner 4-fold grid search)
     0.8300  + gp_log_pl3 feature (log of packet_length_3), discovered via
              gplearn symbolic search on the Zoom voice/video sub-problem
-    ????    + time-ratio ("normalized" time) features -- tested standalone
-             in feature_extensions_and_zoom_rule.py at +0.0155 macro-recall
-             on a single-LightGBM baseline (0.7852 -> 0.8007); this script
-             folds them into the full ensemble and re-measures honestly
-    ????    + Zoom audio-band post-processing rule -- validated below
-             against the actual nested-CV predictions before being trusted
-             on the test set, per the project's leak-free-ablation practice   <- THIS SCRIPT
+    0.8200  (DROPPED) time-ratio ("normalized" time) features -- helped a
+             standalone LightGBM (+0.0155) but cost -0.0100 once folded
+             into this full ensemble; reverted after honest nested-CV test
+    0.8349  + Zoom audio-band post-processing rule -- validated against the
+             actual nested-CV predictions before being trusted on test
+    ????    + soft mode-probability feature (voice-vs-video, leak-free OOF
+             stacking on the SAME 5 folds as the main ensemble) -- this is
+             the one open item from briefing Section 10 that hadn't been
+             tried yet: "feeding mode information as a soft feature into
+             one flat model" was found to beat baseline in the project's
+             own follow-up notebooks, but was never folded into the
+             production script until now. Validated below the same way
+             the Zoom rule was -- against real nested-CV predictions,
+             not assumed.                                                 <- THIS SCRIPT
 
 Rejected/closed directions (see Section 6, Failed Approaches): DES/OvO,
-multi-task app-times-mode factorization, stacked meta-learner, burst/
+multi-task app-times-mode factorization (the HARD-routing version of the
+mode idea -- this script does SOFT conditioning instead, which is the
+version the notebooks actually recommended), stacked meta-learner, burst/
 cumulative/quantized traffic-fingerprinting features, gplearn for
 mode-target and one-vs-rest (all classes), label-noise removal via
 confident learning (leakage artifact), and the auxiliary-dataset /
@@ -30,10 +40,10 @@ transformer / linear-probing idea from the independent sidd20228/task3
 project (tested negative -- feature redundancy + domain gap; see briefing
 Section 8.2). Not re-attempted here.
 
-Run: python3 build_model_final_v2.py
+Run: python3 build_model_final_v4_mode_feature.py
 Expects: Task3/publish/RTC_CyberAICup2026/Training_set.csv
          Task3/publish/RTC_CyberAICup2026/Testing_set.csv
-Writes:  /mnt/user-data/outputs/submission_v2.csv
+Writes:  submission_v4_mode_feature.csv
 """
 
 import numpy as np
@@ -51,9 +61,9 @@ warnings.filterwarnings("ignore")
 RNG = 42
 np.random.seed(RNG)
 
-TRAIN_PATH = "training (1).csv"
-TEST_PATH = "testing (1).csv"
-OUTPUT_PATH = "submission_v3_zoom_only.csv"  # saved next to the script
+TRAIN_PATH = "training.csv"
+TEST_PATH = "testing.csv"
+OUTPUT_PATH = "submission2.csv"  # saved next to the script
 
 L_COLS = [f"packet_length_{i}" for i in range(5)]
 T_COLS = [f"relative_time_{i}" for i in range(5)]
@@ -201,15 +211,65 @@ print(f"Train: {X.shape}, Test: {X_test.shape}, classes: {K}")
 
 
 # ---------------------------------------------------------------------------
-# Step 1: 5-fold OOF probabilities from RF, LightGBM, XGBoost
+# NEW: soft mode-probability feature (voice vs. video), leak-free.
+#
+# The briefing's notebooks found that feeding mode information as a SOFT
+# feature into one flat model beats HARD routing to separate mode-specific
+# models. "Mode" (voice/video) is derivable from the label, so at TRAIN
+# time we can only use an out-of-fold probability (never fit-and-predict on
+# the same rows) or this leaks the answer straight into the target. At TEST
+# time there's no label at all, so a mode classifier is fit on the FULL
+# training set and applied to test features directly -- no leakage there
+# by construction.
+#
+# Splits are computed ONCE here and reused for the main ensemble in Step 1
+# below, so the mode feature for any given row never saw that row's own
+# fold during its own training -- consistent with how the Zoom rule and
+# specialist override are already validated leak-free elsewhere in this
+# script.
 # ---------------------------------------------------------------------------
 skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RNG)
+splits = list(skf.split(X, y))
+fold_id = np.zeros(n, dtype=int)
+for fi, (_, va_idx) in enumerate(splits):
+    fold_id[va_idx] = fi
+
+mode_y = train["label"].str.endswith("_video").astype(int).values  # 1=video, 0=voice
+oof_mode_prob = np.zeros(n)
+
+for fi, (tr_idx, va_idx) in enumerate(splits):
+    mode_clf = make_lgb(seed=RNG + 3)
+    mode_clf.fit(X.iloc[tr_idx], mode_y[tr_idx])
+    oof_mode_prob[va_idx] = mode_clf.predict_proba(X.iloc[va_idx])[:, 1]
+
+mode_clf_full = make_lgb(seed=RNG + 3)
+mode_clf_full.fit(X, mode_y)
+test_mode_prob = mode_clf_full.predict_proba(X_test)[:, 1]
+
+# Sanity check: how good is the mode signal on its own? (Not the final
+# metric -- just tells us whether this feature carries real information
+# before we bother folding it into the 10-class ensemble.)
+from sklearn.metrics import roc_auc_score
+mode_auc = roc_auc_score(mode_y, oof_mode_prob)
+print(f"\nMode classifier (voice vs video) OOF AUC: {mode_auc:.4f}  "
+      f"(sanity check -- should be high; this is a much easier problem "
+      f"than the 10-way task)")
+
+X = X.copy()
+X_test = X_test.copy()
+X["mode_video_prob"] = oof_mode_prob
+X_test["mode_video_prob"] = test_mode_prob
+
+
+# ---------------------------------------------------------------------------
+# Step 1: 5-fold OOF probabilities from RF, LightGBM, XGBoost
+# (reuses the exact same `splits` computed above for the mode feature)
+# ---------------------------------------------------------------------------
 oof_rf = np.zeros((n, K))
 oof_lgb = np.zeros((n, K))
 oof_xgb = np.zeros((n, K))
-fold_id = np.zeros(n, dtype=int)
 
-for fi, (tr_idx, va_idx) in enumerate(skf.split(X, y)):
+for fi, (tr_idx, va_idx) in enumerate(splits):
     m = make_rf(); m.fit(X.iloc[tr_idx], y[tr_idx])
     oof_rf[va_idx] = m.predict_proba(X.iloc[va_idx])
 
@@ -218,8 +278,6 @@ for fi, (tr_idx, va_idx) in enumerate(skf.split(X, y)):
 
     m = make_xgb(); m.fit(X.iloc[tr_idx], y[tr_idx])
     oof_xgb[va_idx] = m.predict_proba(X.iloc[va_idx])
-
-    fold_id[va_idx] = fi
 
 oof_ens = (oof_rf + oof_lgb + oof_xgb) / 3
 
@@ -309,7 +367,8 @@ for T, TAU, s in chosen:
     print(f"  T={T}, TAU={TAU}  (inner score {s:.4f})")
 
 final_macro = recall_score(y, final_pred, average="macro")
-print(f"\nFINAL nested-CV macro-recall (0.8300 feature set, no time-ratio): {final_macro:.4f}")
+print(f"\nFINAL nested-CV macro-recall (0.8300 feature set + mode_video_prob): {final_macro:.4f}")
+print(f"(Compare to 0.8323 without the mode feature -- last confirmed checkpoint)")
 
 per_class = recall_score(y, final_pred, average=None)
 print("\nPer-class recall:")
@@ -333,6 +392,7 @@ zoom_helps = final_macro_zoom > final_macro
 print(f"\n+ Zoom audio-band rule (nested-CV predictions): {final_macro_zoom:.4f}  "
       f"({'KEEP' if zoom_helps else 'DROP'} -- delta {final_macro_zoom - final_macro:+.4f}, "
       f"{n_over_cv} flows overridden)")
+print(f"(Compare to 0.8349 -- your last confirmed checkpoint, mode feature + Zoom rule combined)")
 
 
 # ---------------------------------------------------------------------------
