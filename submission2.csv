@@ -5,7 +5,7 @@
 5,GoogleMeet_voice
 6,Discord_video
 7,Discord_voice
-8,WhatsApp_video
+8,Discord_video
 9,GoogleMeet_video
 10,Discord_voice
 11,Messenger_voice
@@ -41,7 +41,7 @@
 41,Zoom_video
 42,Discord_video
 43,Messenger_video
-44,Messenger_video
+44,Discord_video
 45,GoogleMeet_video
 46,Discord_voice
 47,Messenger_video
@@ -57,7 +57,7 @@
 57,Discord_voice
 58,Messenger_video
 59,Zoom_video
-60,Discord_video
+60,WhatsApp_video
 61,Discord_voice
 62,Zoom_voice
 63,Zoom_voice
@@ -122,7 +122,7 @@
 122,Messenger_voice
 123,Zoom_voice
 124,WhatsApp_voice
-125,Discord_video
+125,Discord_voice
 126,Messenger_voice
 127,Messenger_voice
 128,GoogleMeet_video
@@ -165,7 +165,7 @@
 165,WhatsApp_voice
 166,Zoom_video
 167,Discord_video
-168,Zoom_video
+168,GoogleMeet_video
 169,Zoom_video
 170,GoogleMeet_video
 171,Zoom_video
@@ -244,9 +244,9 @@
 244,Zoom_voice
 245,Messenger_video
 246,Discord_video
-247,Discord_video
+247,Messenger_video
 248,WhatsApp_voice
-249,Messenger_voice
+249,Discord_voice
 250,Discord_video
 251,Discord_voice
 252,Messenger_video
@@ -296,7 +296,7 @@
 296,Zoom_voice
 297,Discord_video
 298,Discord_video
-299,GoogleMeet_voice
+299,GoogleMeet_video
 300,Discord_voice
 301,GoogleMeet_voice
 302,Zoom_voice
@@ -324,4 +324,4 @@
 324,Messenger_video
 325,Discord_video
 326,Messenger_video
-327,Discord_voice
+327,Zoom_voice
