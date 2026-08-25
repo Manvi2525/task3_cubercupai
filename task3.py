@@ -1,38 +1,3 @@
-
-"""
-RTC Traffic Classification -- CyberAI Cup 2026, Task 3
-FINAL pipeline v5: confirmed-best base (0.8349) + narrowly-scoped candidate
-features, each honestly ablation-gated before being trusted on test.
-
-Confirmed checkpoints so far:
-    0.8300  0.8300 feature set (rank-invariant + gp_log_pl3), no post-proc
-    0.8323  ...measured via nested-CV on this exact script structure
-    0.8349  + Zoom audio-band rule                                <- last confirmed best (v3)
-    0.8241  (DROPPED) + global mode_video_prob feature on the full ensemble
-             -- regressed nested-CV by -0.0082 even before the Zoom rule.
-             GoogleMeet_voice (n=40, smallest class) took the biggest hit:
-             0.950 -> 0.875. Likely cause: mode_video_prob has AUC 0.96,
-             and with shallow trees (depth=4, leaves=15) a single dominant
-             feature crowds out the split budget for subtler size-pattern
-             splits in small specialist-subset training data. Consistent
-             with the earlier time-ratio-feature regression -- broad,
-             globally-injected signal that's redundant with what the
-             prior-correction + temperature-scaling + specialist-override
-             stack already captures tends to hurt more than help here.
-    ????    This script instead tests mode_video_prob SCOPED ONLY to the
-             specialist model (small subset, where it might disambiguate
-             without destabilizing the main ensemble), plus 3 small
-             hand-crafted candidate features targeted at the current worst
-             classes (Zoom_video 0.593, GoogleMeet_video 0.732). Each is
-             individually ablation-gated -- KEEP only if it beats the
-             0.8349 checkpoint on nested-CV, exactly like the Zoom rule.
-
-Run: python3 build_model_v5.py
-Expects: Task3/publish/RTC_CyberAICup2026/Training_set.csv
-         Task3/publish/RTC_CyberAICup2026/Testing_set.csv
-Writes:  submission_v5.csv
-"""
-
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -41,9 +6,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import recall_score
 import lightgbm as lgb
 import xgboost as xgb
-import warnings
 
-warnings.filterwarnings("ignore")
 
 RNG = 42
 np.random.seed(RNG)
@@ -51,7 +14,7 @@ np.random.seed(RNG)
 
 TRAIN_PATH = "training.csv"
 TEST_PATH = "testing.csv"
-OUTPUT_PATH = "submission2.csv"  # saved next to the script
+OUTPUT_PATH = "submission2.csv"  
 
 L_COLS = [f"packet_length_{i}" for i in range(5)]
 T_COLS = [f"relative_time_{i}" for i in range(5)]
@@ -65,10 +28,6 @@ SPECIALIST_CLASSES = [
 T_GRID = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
 TAU_GRID = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25]
 
-
-# ---------------------------------------------------------------------------
-# Base feature set -- CONFIRMED BEST (0.8300), unchanged from v1/v3.
-# ---------------------------------------------------------------------------
 def engineer_base_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     feats = pd.DataFrame(index=df.index)
@@ -183,16 +142,6 @@ def zoom_audio_band_rule(pred_labels, lens, audio_len_threshold):
 
 def zoom_audio_band_rule_gated(pred_labels, lens, probs, classes, audio_len_threshold,
                                 margin_gate=0.15):
-    """
-    Same idea as zoom_audio_band_rule, but only overrides when the model's
-    OWN margin between Zoom_video and Zoom_voice was small -- i.e. skip the
-    override for flows the model called Zoom_video with a clear lead over
-    Zoom_voice specifically (not just "confident overall", which is a much
-    higher and mostly-unreachable bar on a 10-class distribution).
-    `probs` = the ensemble's decided probability matrix (post temperature/
-    prior-correction), `classes` = the label encoder's class list in the
-    same column order as `probs`.
-    """
     pred_labels = np.array(pred_labels, dtype=object)
     zoom_video_idx = list(classes).index("Zoom_video")
     zoom_voice_idx = list(classes).index("Zoom_voice")
@@ -206,11 +155,6 @@ def zoom_audio_band_rule_gated(pred_labels, lens, probs, classes, audio_len_thre
     return return_labels, int(trigger.sum()), video_voice_margin
 
 
-# ---------------------------------------------------------------------------
-# Full nested-CV pipeline, parameterized by which candidate features (and
-# whether the specialist-only mode feature) are switched on -- so we can
-# run it multiple times and compare honestly, exactly like the Zoom rule.
-# ---------------------------------------------------------------------------
 def run_pipeline(X, y, lens_train_arr, classes, difficult_idx, pi_hat, label=""):
     n, K = len(y), len(classes)
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RNG)
@@ -300,10 +244,6 @@ def run_pipeline(X, y, lens_train_arr, classes, difficult_idx, pi_hat, label="")
         print(f"    {c:20s} {r:.3f}")
     return macro, final_pred, final_probs, chosen
 
-
-# ---------------------------------------------------------------------------
-# Load data, set up base pipeline (CONFIRMED 0.8349 checkpoint)
-# ---------------------------------------------------------------------------
 train = pd.read_csv(TRAIN_PATH)
 test = pd.read_csv(TEST_PATH)
 
@@ -320,9 +260,8 @@ difficult_idx = set(list(classes).index(c) for c in SPECIALIST_CLASSES)
 
 print(f"Train: {X_base.shape}, Test: {X_test_base.shape}, classes: {K}\n")
 
-CHECKPOINT = 0.8371  # your last confirmed best, from v5 (base + C1-C3 + blanket Zoom rule)
+CHECKPOINT = 0.8371  
 
-# --- Candidate features, tested one block at a time, each vs. CHECKPOINT ---
 video_thresh = calibrate_video_threshold(train, lens_train)
 X_cand = add_candidate_features(X_base, lens_train, video_thresh)
 X_test_cand = add_candidate_features(X_test_base, lens_test, video_thresh)
@@ -334,7 +273,7 @@ macro_cand, pred_cand, probs_cand, chosen_cand = run_pipeline(
 
 audio_thresh = calibrate_audio_threshold(train, lens_train)
 
-# Variant A: blanket Zoom rule (your confirmed 0.8371 result)
+
 pred_cand_str = le.inverse_transform(pred_cand)
 pred_cand_zoom_str, n_over = zoom_audio_band_rule(pred_cand_str, lens_train, audio_thresh)
 pred_cand_zoom_idx = le.transform(pred_cand_zoom_str)
@@ -347,9 +286,6 @@ print("  + Zoom rule (blanket) per-class recall:")
 for c, r in sorted(zip(classes, per_class_zoom), key=lambda x: x[1]):
     print(f"      {c:20s} {r:.3f}")
 
-# Variant B: gated Zoom rule -- skip the override when the model's own
-# margin between Zoom_video and Zoom_voice was clear, to try to win back
-# some of the Zoom_video recall the blanket rule gives away.
 audio_trigger_mask = (
     np.isin(pred_cand_str, ["Zoom_voice", "Zoom_video"])
     & (lens_train <= audio_thresh).all(axis=1)
@@ -380,9 +316,6 @@ for c, r in sorted(zip(classes, per_class_gated), key=lambda x: x[1]):
     print(f"      {c:20s} {r:.3f}")
 print()
 
-# --- Decide final feature set + Zoom-rule variant based on the honest
-# results above. Priority: candidate features must beat CHECKPOINT on
-# some Zoom-rule variant, then pick whichever variant scores highest. ---
 use_candidates = max(macro_cand_zoom, macro_cand_gated) > CHECKPOINT
 use_gated_rule = macro_cand_gated > macro_cand_zoom
 X_final = X_cand if use_candidates else X_base
@@ -390,10 +323,6 @@ X_test_final = X_test_cand if use_candidates else X_test_base
 print(f"Final decision: {'KEEPING' if use_candidates else 'DROPPING'} candidate features C1-C3.")
 print(f"Final decision: using {'GATED' if use_gated_rule else 'BLANKET'} Zoom rule.\n")
 
-# ---------------------------------------------------------------------------
-# Refit on full training data with the chosen feature set + Zoom rule,
-# predict on the real test set.
-# ---------------------------------------------------------------------------
 macro_final, final_pred_full, final_probs_full, chosen_final = run_pipeline(
     X_final, y, lens_train, classes, difficult_idx, pi_hat,
     label="FINAL chosen pipeline"
@@ -451,6 +380,5 @@ submission = pd.DataFrame({"idx": np.arange(1, len(test_labels) + 1), "label": t
 submission.to_csv(OUTPUT_PATH, index=False, header=False)
 print(f"\nSaved {len(submission)} predictions to {OUTPUT_PATH}")
 print(pd.Series(test_labels).value_counts())
-
 
 
